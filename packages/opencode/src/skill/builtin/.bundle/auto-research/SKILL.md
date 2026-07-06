@@ -36,6 +36,9 @@ python3 scripts/verify_citation.py --bib refs.bib --out audit.json
 
 # Fetch a paper's full text (arXiv ID or abs URL → text via ar5iv HTML, falls back to abstract)
 python3 scripts/fetch_paper.py 2504.17192 --out paper.txt
+
+# Fetch original LaTeX source instead (exact equations/tables — prefer for paper reproduction)
+python3 scripts/fetch_paper.py 2504.17192 --latex --out-dir paper_src/
 ```
 
 All scripts are stdlib-only Python 3. On HTTP 429/5xx they retry with backoff; if a source keeps failing, continue with the remaining sources and note the gap.

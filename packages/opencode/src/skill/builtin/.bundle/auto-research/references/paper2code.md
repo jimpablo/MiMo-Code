@@ -7,8 +7,13 @@ Reproduce a paper's method as a working repo. Modeled on Paper2Code's planning �
 ### 1. Acquire the paper
 
 ```bash
+# LaTeX source — preferred for reproduction: exact equations, tables, hyperparameters
+python3 scripts/fetch_paper.py <arxiv_id_or_url> --latex --out-dir papers/src/
+# fallback: readable text via ar5iv (equations flattened)
 python3 scripts/fetch_paper.py <arxiv_id_or_url> --out papers/paper.txt
 ```
+
+`--latex` prints the extracted file list and the main .tex (the one with `\documentclass`); some e-prints are PDF-only — fall back to text mode then.
 
 If the user has a PDF instead, ask them for the arXiv id (ar5iv gives cleaner text) or read the PDF directly. Check whether an official repo already exists (search GitHub via WebFetch) — if it does, ask the user whether they want reproduction-from-scratch or just to run the official code.
 

@@ -2,25 +2,48 @@
 """Fetch a paper's readable full text without any PDF tooling.
 
 Strategy: arXiv id/URL -> ar5iv HTML (full text) -> fallback to arXiv abstract.
-For DOIs: resolve open-access URL via Unpaywall-free route (OpenAlex OA location),
-then fetch that page's text if it is HTML.
+With --latex: download the arXiv e-print (original LaTeX source) instead —
+exact equations, tables, macros. Extracted to a directory.
+For DOIs: resolve open-access URL via OpenAlex OA location and fetch that
+page's text if it is HTML.
 
 Usage:
   fetch_paper.py 2504.17192 --out paper.txt
   fetch_paper.py https://arxiv.org/abs/2504.17192
+  fetch_paper.py 2504.17192 --latex --out-dir paper_src/
   fetch_paper.py --doi 10.18653/v1/2020.acl-main.1
 """
 import argparse
+import gzip
 import html
+import io
 import json
+import os
 import re
 import sys
+import tarfile
 import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
 UA = {"User-Agent": "auto-research-skill/1.0 (mailto:research@example.org)"}
+
+
+def http_get_bytes(url, retries=3):
+    for i in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.read()
+        except Exception as e:
+            code = getattr(e, "code", None)
+            if i < retries - 1 and (code is None or code == 429 or code >= 500):
+                time.sleep(2 ** (i + 1))
+                continue
+            print(f"[warn] GET failed ({e}): {url}", file=sys.stderr)
+            return None
+    return None
 
 
 def http_get(url, retries=3):
@@ -75,6 +98,44 @@ def fetch_arxiv(aid):
     return arxiv_abstract(aid)
 
 
+def fetch_latex(aid, out_dir):
+    """Download arXiv e-print (original LaTeX source) and extract to out_dir."""
+    raw = http_get_bytes(f"https://arxiv.org/e-print/{aid}")
+    if not raw:
+        return None
+    os.makedirs(out_dir, exist_ok=True)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+            tf.extractall(out_dir, filter="data")
+    except tarfile.ReadError:
+        # single-file submission: gzipped .tex (or raw tex/pdf)
+        try:
+            data = gzip.decompress(raw)
+        except OSError:
+            data = raw
+        if data[:5] == b"%PDF-":
+            print("[warn] e-print is PDF-only (no LaTeX source available)", file=sys.stderr)
+            return None
+        with open(os.path.join(out_dir, "main.tex"), "wb") as f:
+            f.write(data)
+
+    tex_files = []
+    for root, _, files in os.walk(out_dir):
+        for fn in files:
+            if fn.endswith(".tex"):
+                tex_files.append(os.path.relpath(os.path.join(root, fn), out_dir))
+    # main file = the one containing \documentclass
+    mains = []
+    for rel in tex_files:
+        try:
+            head = open(os.path.join(out_dir, rel), encoding="utf-8", errors="replace").read(4000)
+            if "\\documentclass" in head:
+                mains.append(rel)
+        except OSError:
+            pass
+    return {"dir": out_dir, "tex_files": sorted(tex_files), "main": mains[0] if mains else None}
+
+
 def fetch_doi(doi):
     body = http_get(f"https://api.openalex.org/works/doi:{urllib.parse.quote(doi)}")
     if not body:
@@ -104,7 +165,26 @@ def main():
     ap.add_argument("paper", nargs="?", help="arXiv id or arxiv.org URL")
     ap.add_argument("--doi")
     ap.add_argument("--out")
+    ap.add_argument("--latex", action="store_true",
+                    help="download original LaTeX source (e-print) instead of text")
+    ap.add_argument("--out-dir", default=None, help="extraction dir for --latex")
     args = ap.parse_args()
+
+    if args.latex:
+        if not args.paper:
+            ap.error("--latex requires an arXiv id/URL")
+        m = re.search(r"(\d{4}\.\d{4,5})(v\d+)?", args.paper)
+        if not m:
+            ap.error(f"cannot parse arXiv id from: {args.paper}")
+        aid = m.group(1)
+        info = fetch_latex(aid, args.out_dir or f"arxiv_{aid.replace('.', '_')}_src")
+        if not info:
+            print("[error] could not fetch LaTeX source (try without --latex for text)", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(info, indent=2))
+        print(f"[info] extracted {len(info['tex_files'])} .tex files to {info['dir']}, "
+              f"main: {info['main']}", file=sys.stderr)
+        return
 
     text = None
     if args.doi:
