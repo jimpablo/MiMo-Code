@@ -441,13 +441,27 @@ export const layer = Layer.effect(
               catch: (err) => err,
             }).pipe(Effect.catch(() => Effect.succeed(undefined)))
             files[match] = stat?.mtimeMs ?? 0
-            // require() + cache delete instead of dynamic import: Bun ignores
-            // query-string cache busters on file: imports, so a re-import would
-            // return the stale module forever.
-            const mod = yield* Effect.try({
-              try: () => {
-                delete require.cache[match]
-                return require(match) as Record<string, unknown>
+            // Transpile and load the hook file. We use Bun.build to produce a
+            // temporary .js artifact, then dynamic-import that artifact. This
+            // avoids two pitfalls: (1) Bun's import() ignores query-string cache
+            // busters so re-imports return stale modules, (2) require() transpiles
+            // .ts in some contexts but not others (CI Linux edge case).
+            const mod = yield* Effect.tryPromise({
+              try: async () => {
+                const result = await Bun.build({
+                  entrypoints: [match],
+                  target: "bun",
+                  format: "esm",
+                })
+                if (!result.success) throw new Error(result.logs.map(String).join("\n"))
+                const blob = result.outputs[0]
+                const tmpFile = `${match}.${Date.now()}.mjs`
+                await Bun.write(tmpFile, blob)
+                try {
+                  return await import(tmpFile) as Record<string, unknown>
+                } finally {
+                  fs.promises.unlink(tmpFile).catch(() => {})
+                }
               },
               catch: (err) => err,
             }).pipe(Effect.catch((err) => {
