@@ -61,22 +61,58 @@ describe("MCP tool result normalization", () => {
   })
 
   test("converts inline media and resource links while retaining raw content", () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     const result: CallToolResult = {
       content: [
         { type: "audio", data: "YXVkaW8=", mimeType: "audio/wav" },
+        {
+          type: "resource",
+          resource: {
+            uri: "mcp://diagnostic.txt",
+            text: "Resource diagnostic",
+            mimeType: "text/plain",
+          },
+        },
+        {
+          type: "resource",
+          resource: {
+            uri: "mcp://screenshot.png",
+            blob: png,
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "resource",
+          resource: {
+            uri: "mcp://diagnostic.bin",
+            blob: "AAE=",
+          },
+        },
         { type: "resource_link", uri: "file:///tmp/report.txt", name: "report" },
       ],
     }
 
     const normalized = normalizeToolResult(parseResult(result))
 
-    expect(normalized.output).toBe("report: file:///tmp/report.txt")
+    expect(normalized.output).toBe("Resource diagnostic\n\nreport: file:///tmp/report.txt")
     expect(normalized.attachments).toEqual([
       {
         mime: "audio/wav",
         url: "data:audio/wav;base64,YXVkaW8=",
       },
+      {
+        mime: "image/png",
+        url: `data:image/png;base64,${png}`,
+        filename: "mcp://screenshot.png",
+      },
+      {
+        mime: "application/octet-stream",
+        url: "data:application/octet-stream;base64,AAE=",
+        filename: "mcp://diagnostic.bin",
+      },
     ])
+    expect(normalized.output).not.toContain(png)
+    expect(normalized.output).not.toContain("AAE=")
     expect(normalized.content).toEqual(result.content)
   })
 
@@ -89,5 +125,49 @@ describe("MCP tool result normalization", () => {
     const normalized = normalizeToolResult(parseResult(result))
 
     expect(normalized.output).toBe('Result:\n{\n  "changed": true\n}')
+  })
+
+  test("extracts base64 data resource links without exposing their payload as text", () => {
+    const payload = "AQIDBAUGBwgJ"
+    const result: CallToolResult = {
+      content: [
+        {
+          type: "resource_link",
+          uri: `data:application/octet-stream;base64,${payload}`,
+          name: "binary",
+        },
+        {
+          type: "resource_link",
+          uri: "data:text/plain,secret-payload",
+          name: "inline text",
+        },
+      ],
+    }
+
+    const normalized = normalizeToolResult(parseResult(result))
+
+    expect(normalized.output).toBe(
+      "binary: [inline application/octet-stream resource]\n\ninline text: [data URI omitted]",
+    )
+    expect(normalized.output).not.toContain(payload)
+    expect(normalized.output).not.toContain("secret-payload")
+    expect(normalized.attachments).toEqual([
+      {
+        mime: "application/octet-stream",
+        url: `data:application/octet-stream;base64,${payload}`,
+        filename: "binary",
+      },
+    ])
+  })
+
+  test("does not mistake a short JSON substring for serialized structured content", () => {
+    const result: CallToolResult = {
+      content: [{ type: "text", text: "Processed an empty {} template" }],
+      structuredContent: {},
+    }
+
+    const normalized = normalizeToolResult(parseResult(result))
+
+    expect(normalized.output).toBe("Processed an empty {} template\n\nStructured content:\n{}")
   })
 })

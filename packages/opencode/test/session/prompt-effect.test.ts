@@ -265,11 +265,30 @@ function makeHttp(mcpService = mcp) {
 
 const it = testEffect(makeHttp())
 const mcpLegacyMetadata = { interrupted: true, output: "must not become a successful result" }
-const mcpErrorImageURL = "data:image/png;base64,Zm9v"
+const mcpErrorImage = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+const mcpErrorAudio = "UklGRiUAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQEAAACA"
+const mcpErrorBinary = "AQIDBAUGBwgJ"
+const mcpErrorImageURL = `data:image/png;base64,${mcpErrorImage}`
 const mcpErrorResult: CallToolResult = {
   content: [
     { type: "text", text: "Message was not sent" },
-    { type: "image", data: "Zm9v", mimeType: "image/png" },
+    { type: "image", data: mcpErrorImage, mimeType: "image/png" },
+    {
+      type: "resource",
+      resource: {
+        uri: "mcp://diagnostic.txt",
+        text: "Resource diagnostic",
+        mimeType: "text/plain",
+      },
+    },
+    { type: "audio", data: mcpErrorAudio, mimeType: "audio/wav" },
+    {
+      type: "resource",
+      resource: {
+        uri: "mcp://diagnostic.bin",
+        blob: mcpErrorBinary,
+      },
+    },
   ],
   structuredContent: { sent: false, reason: "composer rejected the request" },
   isError: true,
@@ -347,7 +366,7 @@ function providerCfg(url: string) {
   }
 }
 
-function imageProviderCfg(url: string) {
+function mediaProviderCfg(url: string) {
   const config = providerCfg(url)
   return {
     ...config,
@@ -361,7 +380,7 @@ function imageProviderCfg(url: string) {
             ...config.provider.test.models["test-model"],
             attachment: true,
             modalities: {
-              input: ["text", "image"] as ("text" | "image")[],
+              input: ["text", "image", "audio"] as ("text" | "image" | "audio")[],
               output: ["text"] as "text"[],
             },
           },
@@ -659,7 +678,7 @@ mcpIt.live("MCP isError becomes a tool error without losing standard result fiel
       if (!tool) return
 
       expect(tool.state.error).toBe(
-        'Message was not sent\n\nStructured content:\n{"sent":false,"reason":"composer rejected the request"}',
+        'Message was not sent\n\nResource diagnostic\n\nStructured content:\n{"sent":false,"reason":"composer rejected the request"}',
       )
       expect(tool.state.metadata?.mcp).toEqual({
         structuredContent: mcpErrorResult.structuredContent,
@@ -667,11 +686,26 @@ mcpIt.live("MCP isError becomes a tool error without losing standard result fiel
         _meta: mcpErrorResult._meta,
         legacyMetadata: mcpLegacyMetadata,
       })
-      expect(tool.state.attachments).toHaveLength(1)
+      expect(tool.state.attachments).toHaveLength(3)
       expect(tool.state.attachments?.[0]).toMatchObject({
         type: "file",
         mime: "image/png",
         url: mcpErrorImageURL,
+        sessionID: session.id,
+        messageID: tool.messageID,
+      })
+      expect(tool.state.attachments?.[1]).toMatchObject({
+        type: "file",
+        mime: "audio/wav",
+        url: `data:audio/wav;base64,${mcpErrorAudio}`,
+        sessionID: session.id,
+        messageID: tool.messageID,
+      })
+      expect(tool.state.attachments?.[2]).toMatchObject({
+        type: "file",
+        mime: "application/octet-stream",
+        url: `data:application/octet-stream;base64,${mcpErrorBinary}`,
+        filename: "mcp://diagnostic.bin",
         sessionID: session.id,
         messageID: tool.messageID,
       })
@@ -681,7 +715,14 @@ mcpIt.live("MCP isError becomes a tool error without losing standard result fiel
       const requests = yield* llm.inputs
       const followup = JSON.stringify(requests[1])
       expect(followup).toContain("Message was not sent")
+      expect(followup).toContain("Resource diagnostic")
       expect(followup).toContain("composer rejected the request")
+      expect(followup).toContain('Tool \\"mcp_result\\" call')
+      expect(followup).toContain("failed:")
+      expect(followup).toContain("diagnostic.bin")
+      expect(followup).not.toContain("mcp://diagnostic.bin")
+      expect(followup).toContain("application/octet-stream")
+      expect(followup).not.toContain(mcpErrorBinary)
       expect(followup).not.toContain("must not become a successful result")
       expect(followup).not.toContain("do-not-send-to-model")
       expect(requests[1]).toMatchObject({
@@ -691,12 +732,13 @@ mcpIt.live("MCP isError becomes a tool error without losing standard result fiel
             content: expect.arrayContaining([
               { type: "text", text: MessageV2.SYNTHETIC_ATTACHMENT_PROMPT },
               { type: "image_url", image_url: { url: mcpErrorImageURL } },
+              { type: "input_audio", input_audio: { data: mcpErrorAudio, format: "wav" } },
             ]),
           },
         ]),
       })
     }),
-    { git: true, config: imageProviderCfg },
+    { git: true, config: mediaProviderCfg },
   ),
 )
 

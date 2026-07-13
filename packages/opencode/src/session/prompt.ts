@@ -1189,11 +1189,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 metadata,
                 output: truncated.content,
                 attachments,
-                content: normalized.content,
-                ...(normalized.structuredContent === undefined
-                  ? {}
-                  : { structuredContent: normalized.structuredContent }),
-                isError: false,
               }
               if (opts.abortSignal?.aborted) {
                 yield* input.processor.completeToolCall(opts.toolCallId, output)

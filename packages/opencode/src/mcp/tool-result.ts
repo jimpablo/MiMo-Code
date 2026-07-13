@@ -23,6 +23,16 @@ export type NormalizedToolResult = {
   metadata: Record<string, unknown> & { mcp: ToolResultMetadata }
 }
 
+function containsSerializedBlock(output: string, serialized: string) {
+  const value = output.replaceAll("\r\n", "\n").trim()
+  return (
+    value === serialized ||
+    value.startsWith(`${serialized}\n`) ||
+    value.endsWith(`\n${serialized}`) ||
+    value.includes(`\n${serialized}\n`)
+  )
+}
+
 /**
  * Converts a standard MCP CallToolResult into MiMoCode's model-facing text,
  * attachments, and lossless client metadata.
@@ -51,7 +61,23 @@ export function normalizeToolResult(result: CallToolResult): NormalizedToolResul
     }
 
     if (item.type === "resource_link") {
-      text.push(`${item.title ?? item.name}: ${item.uri}`)
+      const name = item.title ?? item.name
+      const uri = item.uri.trim()
+      if (/^data:/i.test(uri)) {
+        const inline = uri.match(/^data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/i)
+        if (inline) {
+          attachments.push({
+            mime: inline[1],
+            url: uri,
+            filename: name,
+          })
+          text.push(`${name}: [inline ${inline[1]} resource]`)
+        } else {
+          text.push(`${name}: [data URI omitted]`)
+        }
+        continue
+      }
+      text.push(`${name}: ${item.uri}`)
       continue
     }
 
@@ -77,7 +103,8 @@ export function normalizeToolResult(result: CallToolResult): NormalizedToolResul
   const hasVisibleText = text.some((item) => item.trim().length > 0)
   const alreadySerialized =
     structured !== undefined &&
-    (textOutput.includes(structured) || (prettyStructured !== undefined && textOutput.includes(prettyStructured)))
+    (containsSerializedBlock(textOutput, structured) ||
+      (prettyStructured !== undefined && containsSerializedBlock(textOutput, prettyStructured)))
   const output =
     structured === undefined || alreadySerialized
       ? textOutput
