@@ -207,6 +207,17 @@ interface StartInput {
    * result as its own tool output, so a parent inbox notification would surface a
    * DUPLICATE completion (and duplicate error text) on the next turn. */
   notifyOnTerminal?: boolean
+  /** Is a HUMAN attached to this launch who can answer a permission prompt? The
+   * up-front manifest permission ask uses this to decide `interactive`: a
+   * FOREGROUND launch (a real interactive session actor) prompts the human as
+   * before; a BACKGROUND/NON-INTERACTIVE launcher (a background subagent, a
+   * system actor) — or any NESTED workflow() sub-run (which has no launcher at
+   * all) — asks with `interactive: false` so the permission layer fails CLOSED
+   * (immediate DeniedError) instead of hanging forever on a reply that never
+   * comes. The workflow tool sets this from the launching actor's background
+   * flag; launch() forces it false for nested runs (depth > 0). Defaults to
+   * false (fail-closed) when the launcher can't be determined. */
+  interactive?: boolean
 }
 
 /** Options the guest may pass to `agent(prompt, opts?)`. */
@@ -670,13 +681,26 @@ export const layer = Layer.effect(
 
       // Up-front permission manifest: the workflow's agents run as background
       // actors that cannot answer a permission prompt (their asks fail closed).
-      // So here — in the foreground launch context, where a human CAN answer —
-      // request each declared permission ONCE. On "always" the grant lands in the
-      // session ruleset (Permission.reply), and every background subagent sharing
-      // this sessionID inherits it (an allow rule short-circuits before their
-      // non-interactive auto-deny). Denial/rejection does NOT abort the run: the
-      // affected check just falls back or fails closed, per the workflow's own
-      // logic. Best-effort + never-throw so a manifest hiccup can't break launch.
+      // So here — in the LAUNCH context — request each declared permission ONCE.
+      // On "always" the grant lands in the session ruleset (Permission.reply),
+      // and every background subagent sharing this sessionID inherits it (an allow
+      // rule short-circuits before their non-interactive auto-deny).
+      //
+      // CRITICAL — this ask must NOT hang. It is interactive (blocks for a human
+      // reply) ONLY when a human is actually attached to this launch. A FOREGROUND
+      // launch (interactive session actor) prompts as before. But a BACKGROUND /
+      // NON-INTERACTIVE launcher — a background subagent, a system actor — or any
+      // NESTED workflow() sub-run (depth > 0, spawned by a parent fiber with NO
+      // launcher at all) has no human to answer, so we force interactive:false.
+      // The permission layer then fails CLOSED (immediate DeniedError, no Deferred,
+      // provably cannot hang) exactly as subagent asks do. Effect.catchCause only
+      // rescues failure/denial — it does NOT rescue an indefinite block, so the
+      // interactive flag (not the catch) is what prevents the hang.
+      //
+      // Denial/rejection does NOT abort the run: the affected check just falls back
+      // or fails closed, per the workflow's own logic. Best-effort + never-throw so
+      // a manifest hiccup can't break launch.
+      const askInteractive = depth > 0 ? false : input.interactive === true
       const declaredPermissions = parsed.ok ? parsed.meta.permissions : undefined
       if (declaredPermissions && declaredPermissions.length) {
         for (const decl of declaredPermissions) {
@@ -687,6 +711,7 @@ export const layer = Layer.effect(
               permission: decl.permission,
               patterns,
               always: decl.always ?? patterns,
+              interactive: askInteractive,
               metadata: { workflow: name, ...(decl.reason ? { reason: decl.reason } : {}) },
               ruleset: [],
             })

@@ -72,6 +72,8 @@ export function parseMeta(script: string): ParseResult {
         if (entry[key] !== undefined && (!Array.isArray(entry[key]) || (entry[key] as unknown[]).some((x) => typeof x !== "string")))
           return { ok: false, error: `meta.permissions[].${key} must be an array of strings` }
       }
+      if (entry.reason !== undefined && typeof entry.reason !== "string")
+        return { ok: false, error: "meta.permissions[].reason must be a string" }
     }
   }
   const endIndex = close + 1 + (script[close + 1] === ";" ? 1 : 0)
