@@ -14,6 +14,12 @@ const log = Log.create({ service: "actor.registry" })
 const STUCK_THRESHOLD_MS = 5 * 60 * 1000 // 5 minutes
 const SCAN_INTERVAL_MS = 60 * 1000 // every 60s
 
+// Process-level singleton instance ID for orphan recovery.
+// Derived from process.pid + process start timestamp so it is stable
+// across layer rebuilds within the same process. A genuine new process
+// (different pid) gets a different ID and correctly reclaims dead rows.
+const PROCESS_INSTANCE_ID = `${process.pid}-${process.hrtime.bigint()}`
+
 type ActorRow = typeof ActorRegistryTable.$inferSelect
 
 function fromRow(row: ActorRow): Actor {
@@ -94,9 +100,9 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
 
-    // Unique ID for this registry layer instance — used to distinguish
-    // actors created by THIS process from leftover rows of a previous one.
-    const instanceID = crypto.randomUUID()
+    // Use the process-level singleton for orphan recovery.
+    // This is stable across layer rebuilds within the same process.
+    const instanceID = PROCESS_INSTANCE_ID
 
     // --- CRUD methods ---
 
